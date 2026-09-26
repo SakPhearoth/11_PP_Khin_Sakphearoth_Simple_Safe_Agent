@@ -3,7 +3,14 @@ from pydantic import BaseModel, Field
 
 
 class SearchProductsInput(BaseModel):
-    category: str = Field(description="Product category: coffee, tea, pastry, or dessert")
+    category: str | None = Field(
+        default=None,
+        description="Product category: coffee, tea, pastry, or dessert"
+    )
+    product_name: str | None = Field(
+        default=None,
+        description="Specific product name, such as Americano, Latte, or Croissant"
+    )
 
 
 class CheckStockInput(BaseModel):

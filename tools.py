@@ -5,20 +5,68 @@ CAFE_MAX_CAPACITY = 20
 VALID_CATEGORIES = {"coffee", "tea", "pastry", "dessert"}
 
 
-def search_products(category: str) -> dict:
-    category = category.strip().lower()
-    if category not in VALID_CATEGORIES:
-        return {"status": "error", "error_code": "INVALID_CATEGORY", "message": "Category must be coffee, tea, pastry, or dessert."}
+def search_products(
+    category: str | None = None,
+    product_name: str | None = None,
+) -> dict:
+    category = category.strip().lower() if category else None
+    product_name = product_name.strip() if product_name else None
+
+    if not category and not product_name:
+        return {
+            "status": "error",
+            "error_code": "MISSING_SEARCH_TERM",
+            "message": "Provide a product name or category.",
+        }
+
+    if category and category not in VALID_CATEGORIES:
+        return {
+            "status": "error",
+            "error_code": "INVALID_CATEGORY",
+            "message": "Category must be coffee, tea, pastry, or dessert.",
+        }
 
     conn = get_connection()
+
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, name, category, price, stock FROM products WHERE category = %s ORDER BY price ASC", (category,))
+            if product_name:
+                cur.execute(
+                    """
+                    SELECT id, name, category, price, stock
+                    FROM products
+                    WHERE LOWER(name) = LOWER(%s)
+                    ORDER BY price ASC
+                    """,
+                    (product_name,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, name, category, price, stock
+                    FROM products
+                    WHERE category = %s
+                    ORDER BY price ASC
+                    """,
+                    (category,),
+                )
+
             rows = cur.fetchall()
-        return {"status": "success", "products": [
-            {"id": r[0], "name": r[1], "category": r[2], "price": float(r[3]), "stock": r[4]}
-            for r in rows
-        ]}
+
+        return {
+            "status": "success",
+            "products": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "category": r[2],
+                    "price": float(r[3]),
+                    "stock": r[4],
+                }
+                for r in rows
+            ],
+        }
+
     finally:
         conn.close()
 
@@ -84,10 +132,17 @@ def reserve_table(customer_name: str, reservation_date: date, reservation_time: 
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT COALESCE(SUM(number_of_people), 0) FROM reservations WHERE reservation_date = %s AND reservation_time = %s AND status = 'confirmed' FOR UPDATE",
-                    (reservation_date, reservation_time),
+                     """
+    SELECT number_of_people
+    FROM reservations
+    WHERE reservation_date = %s
+      AND reservation_time = %s
+      AND status = 'confirmed'
+    FOR UPDATE
+    """,
+    (reservation_date, reservation_time),
                 )
-                existing = int(cur.fetchone()[0])
+                existing = sum(row[0] for row in cur.fetchall())
                 if existing + number_of_people > CAFE_MAX_CAPACITY:
                     return {"status": "error", "error_code": "TABLE_UNAVAILABLE", "message": "Not enough seating capacity for that time.", "capacity": CAFE_MAX_CAPACITY, "already_reserved": existing, "requested": number_of_people}
                 cur.execute(
