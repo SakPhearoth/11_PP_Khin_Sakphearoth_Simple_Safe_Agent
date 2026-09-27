@@ -12,9 +12,11 @@ The project demonstrates a tool-using agent with an application-level safety lay
 
 The agent receives a user's request and decides what action is needed. When a tool is required, the application validates and controls the requested tool call before allowing it to execute.
 
-Core flow:
+**Core flow:**
 
+```text
 User → Agent/LLM → Tool Call → Harness → Tool → PostgreSQL → Tool Result → Agent → Final Answer
+```
 
 The LLM proposes actions, but the application Harness decides whether the requested action is allowed to execute.
 
@@ -36,9 +38,9 @@ The project uses LangGraph for the agent loop, Pydantic for input schemas, and P
 
 ## Agent Loop
 
-The agent follows a decision → action → observation → next decision loop.
+The agent follows a **decision → action → observation → next decision** loop.
 
-Example request:
+### Example Request
 
 > I want 2 latte.
 
@@ -57,6 +59,7 @@ The workflow can be:
 
 The Harness is placed between the agent's tool call and the actual tool execution:
 
+```text
 User
 ↓
 LangGraph Agent
@@ -77,6 +80,7 @@ Tool Result
 ↓
 Agent
 ↺
+```
 
 ---
 
@@ -85,7 +89,7 @@ Agent
 The application enforces permissions in `harness.py`, rather than relying only on the LLM prompt.
 
 | Tool | Customer | Admin |
-|---|---:|---:|
+|---|:---:|:---:|
 | `search_products_tool` | Yes | Yes |
 | `check_stock_tool` | Yes | Yes |
 | `place_order_tool` | Yes | No |
@@ -145,54 +149,75 @@ cafe-agent/
 ├── .env.example
 ├── .gitignore
 └── init.sql
+```
 
-Main Files
-File	Purpose
-main.py	Starts the application and handles user interaction.
-agent.py	Defines the LangGraph agent and agent workflows.
-tools.py	Contains the cafe tools and database operations.
-schemas.py	Defines Pydantic input schemas.
-harness.py	Enforces permissions, validation, and tool-call limits.
-db.py	Handles PostgreSQL database connections.
-init.sql	Creates the database tables and initial product data.
+### Main Files
 
+| File | Purpose |
+|---|---|
+| `main.py` | Starts the application and handles user interaction. |
+| `agent.py` | Defines the LangGraph agent and agent workflows. |
+| `tools.py` | Contains the cafe tools and database operations. |
+| `schemas.py` | Defines Pydantic input schemas. |
+| `harness.py` | Enforces permissions, validation, and tool-call limits. |
+| `db.py` | Handles PostgreSQL database connections. |
+| `init.sql` | Creates the database tables and initial product data. |
 
-Example Run
-1. Customer places an order
+---
+
+## Example Run
+
+### 1. Customer Places an Order
+
+```text
 Role: customer
 
 You: I want 2 latte
 
 Agent:
 Order #2 confirmed: 2 Latte. Total: $6.00.
+```
 
 The order workflow searches for the product, checks stock, and then places the order.
-2. Customer attempts an admin action
+
+### 2. Customer Attempts an Admin Action
+
+```text
 Role: customer
 
 You: update stock product 1 to 30
 
 Agent:
 Role 'customer' cannot use 'update_stock_tool'.
+```
 
 The Harness blocks the action because customers do not have permission to update stock.
-3. Admin updates stock
+
+### 3. Admin Updates Stock
+
+```text
 Role: admin
 
 You: update stock product 1 to 30
 
 Agent:
 Product 1 (Americano) stock updated to 30.
+```
 
-4. Invalid stock quantity
+### 4. Invalid Stock Quantity
+
+```text
 Role: admin
 
 You: update stock product 1 to -5
 
 Agent:
 quantity must be an integer from 0 to 1000.
+```
 
-5. Customer reserves a table
+### 5. Customer Reserves a Table
+
+```text
 Role: customer
 
 You: I want to reserve a table for 2 people tomorrow at 15:00
@@ -204,30 +229,52 @@ You: the name is roth
 
 Agent:
 Reservation #3 confirmed for roth: 2 people on 2026-09-28 at 15:00.
+```
 
-6. Invalid reservation size
+### 6. Invalid Reservation Size
+
+```text
 Role: customer
 
 You: 21 people tomorrow at 15:00
 
 Agent:
 Number of people must be between 1 and 20.
+```
 
-Setup
-1. Create the PostgreSQL database
+---
+
+## Setup
+
+### 1. Create the PostgreSQL Database
+
 Create a database named:
-cafe_agent
 
-2. Initialize the database
-Run init.sql against the cafe_agent database.
-3. Configure environment variables
+```text
+cafe_agent
+```
+
+### 2. Initialize the Database
+
+Run `init.sql` against the `cafe_agent` database.
+
+### 3. Configure Environment Variables
+
 Copy:
+
+```text
 .env.example
+```
 
 to:
+
+```text
 .env
+```
 
 Example:
+
+```env
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=cafe_agent
@@ -237,22 +284,40 @@ DB_PASSWORD=
 LLM_MODEL=llama3.2:latest
 OLLAMA_BASE_URL=http://localhost:11434
 MAX_ITERATIONS=6
+```
 
-4. Install dependencies
+### 4. Install Dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-5. Make sure Ollama is running
+### 5. Make Sure Ollama Is Running
+
 Make sure the configured Ollama model is available.
-For example:
-ollama list
 
-6. Run the application
+For example:
+
+```bash
+ollama list
+```
+
+### 6. Run the Application
+
+```bash
 python main.py
+```
 
 Choose either:
+
+```text
 customer
+```
 
 or:
+
+```text
 admin
+```
 
 Then enter requests in the terminal.
