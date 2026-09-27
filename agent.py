@@ -2,6 +2,7 @@ import json
 import os
 import re
 from typing import Any, TypedDict
+from datetime import date, datetime, timedelta
 
 from dotenv import load_dotenv
 from langchain_core.messages import (
@@ -380,13 +381,18 @@ def extract_order_request(text: str):
 
 def extract_customer_name(text: str):
     """
-    Detect simple customer-name statements:
+    Detect customer names such as:
 
-        My name is Khin
-        name is Khin
+        My name is Roth
+        name is Roth
+        Roth Sak
     """
 
-    pattern = r"\b(?:my\s+name\s+is|name\s+is)\s+([A-Za-z][A-Za-z'-]{0,98})"
+    pattern = (
+        r"\b(?:my\s+name\s+is|"
+        r"name\s+is)\s+"
+        r"([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,2})"
+    )
 
     match = re.search(
         pattern,
@@ -394,10 +400,25 @@ def extract_customer_name(text: str):
         re.IGNORECASE,
     )
 
-    if not match:
-        return None
+    if match:
+        return match.group(1).strip()
 
-    return match.group(1).strip()
+    # If the user simply gives a name while completing
+    # a pending action, accept a plain 1–3 word name.
+    plain_name_pattern = (
+        r"^[A-Za-z][A-Za-z'-]*"
+        r"(?:\s+[A-Za-z][A-Za-z'-]*){0,2}$"
+    )
+
+    plain_match = re.fullmatch(
+        plain_name_pattern,
+        text.strip(),
+    )
+
+    if plain_match:
+        return text.strip()
+
+    return None
 
 
 # ============================================================
@@ -572,6 +593,344 @@ def handle_order_workflow(
 # RUN REQUEST
 # ============================================================
 
+def extract_stock_update_request(text: str):
+    """
+    Detect requests such as:
+
+        update stock product 1 to 20
+        set stock product 2 to 15
+        change product 3 stock to 10
+    """
+
+    pattern = (
+        r"\b(?:update|set|change)\s+"
+        r"(?:stock\s+)?"
+        r"product\s+(\d+)\s+"
+        r"(?:stock\s+)?(?:to|=)\s+"
+        r"(-?\d+)\b"
+    )
+
+    match = re.search(
+        pattern,
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    return {
+        "product_id": int(match.group(1)),
+        "quantity": int(match.group(2)),
+    }
+
+def handle_stock_update_workflow(
+    stock_info: dict[str, int],
+    role: str,
+):
+    """
+    Controlled admin stock update.
+
+    The Harness still enforces the permission rule,
+    validation, and tool-call limit.
+    """
+
+    harness = AgentHarness(role=role)
+
+    result_json, _ = harness.execute(
+        tool=update_stock_tool,
+        tool_name="update_stock_tool",
+        args=stock_info,
+        current_count=0,
+    )
+
+    result = json.loads(result_json)
+
+    if result.get("status") != "success":
+        return result.get(
+            "message",
+            "I couldn't update the stock.",
+        )
+
+    product_id = result.get("product_id")
+    product_name = result.get("product_name")
+    quantity = result.get("stock")
+
+    return (
+        f"Product {product_id} ({product_name}) "
+        f"stock updated to {quantity}."
+    )
+    
+def extract_stock_check_request(text: str):
+    """
+    Detect requests such as:
+
+        check stock product 1
+        check product 1 stock
+        how much stock does product 1 have
+    """
+
+    patterns = [
+        r"\bcheck\s+stock\s+product\s+(\d+)\b",
+        r"\bcheck\s+product\s+(\d+)\s+stock\b",
+        r"\bhow\s+much\s+stock\s+does\s+product\s+(\d+)\s+have\b",
+        r"\bhow\s+many\s+product\s+(\d+)\s+are\s+in\s+stock\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE,
+        )
+
+        if match:
+            return {
+                "product_id": int(match.group(1))
+            }
+
+    return None
+
+
+def handle_stock_check_workflow(
+    stock_info: dict[str, int],
+    role: str,
+):
+    """
+    Controlled stock-check workflow.
+
+    The Harness still handles validation and
+    tool-call limits.
+    """
+
+    harness = AgentHarness(role=role)
+
+    result_json, _ = harness.execute(
+        tool=check_stock_tool,
+        tool_name="check_stock_tool",
+        args=stock_info,
+        current_count=0,
+    )
+
+    result = json.loads(result_json)
+
+    if result.get("status") != "success":
+        return result.get(
+            "message",
+            "I couldn't check the stock.",
+        )
+
+    product_name = result.get("name")
+    stock = result.get("stock")
+
+    if product_name:
+        return (
+            f"{product_name} stock is {stock}."
+        )
+
+    return (
+        f"Product {stock_info['product_id']} "
+        f"stock is {stock}."
+    )
+    
+    
+def extract_reservation_request(text: str):
+    """
+    Detect reservation requests containing:
+
+        - number of people
+        - reservation date
+        - reservation time
+
+    Examples:
+
+        reserve a table for 2 people tomorrow at 15:00
+        book a table for 4 people on 2026-09-28 at 18:00
+        reserve a table for 5 people tomorrow at 4
+        reserve a table for 10 people tomorrow at 4:30
+
+    The number of people is extracted dynamically and
+    validated separately by the application.
+    """
+
+    # --------------------------------------------------------
+    # Number of people
+    # --------------------------------------------------------
+
+    people_match = re.search(
+        r"\b(?:for\s+)?(-?\d+)\s+people\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not people_match:
+        return None
+
+    number_of_people = int(
+        people_match.group(1)
+    )
+
+    # --------------------------------------------------------
+    # Time
+    # Accept:
+    #   4
+    #   4:00
+    #   15:00
+    # --------------------------------------------------------
+
+    time_match = re.search(
+        r"\bat\s+(\d{1,2})(?::(\d{2}))?\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not time_match:
+        return None
+
+    hour = int(time_match.group(1))
+    minute = (
+        int(time_match.group(2))
+        if time_match.group(2)
+        else 0
+    )
+
+    # --------------------------------------------------------
+    # Date
+    # --------------------------------------------------------
+
+    date_match = re.search(
+        r"\b(20\d{2}-\d{2}-\d{2})\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if date_match:
+        reservation_date = date.fromisoformat(
+            date_match.group(1)
+        )
+
+    elif re.search(
+        r"\btomorrow\b",
+        text,
+        re.IGNORECASE,
+    ):
+        reservation_date = (
+            date.today() + timedelta(days=1)
+        )
+
+    elif re.search(
+        r"\btoday\b",
+        text,
+        re.IGNORECASE,
+    ):
+        reservation_date = date.today()
+
+    else:
+        return None
+
+    # --------------------------------------------------------
+    # Validate time
+    # --------------------------------------------------------
+
+    if not 0 <= hour <= 23:
+        return {
+            "reservation_date": reservation_date.isoformat(),
+            "reservation_time": f"{hour}:{minute:02d}",
+            "number_of_people": number_of_people,
+        }
+
+    if not 0 <= minute <= 59:
+        return {
+            "reservation_date": reservation_date.isoformat(),
+            "reservation_time": f"{hour:02d}:{minute:02d}",
+            "number_of_people": number_of_people,
+        }
+
+    return {
+        "reservation_date": reservation_date.isoformat(),
+        "reservation_time": f"{hour:02d}:{minute:02d}",
+        "number_of_people": number_of_people,
+    }
+
+def handle_reservation_workflow(
+    reservation_info: dict[str, Any],
+    customer_name: str | None,
+    role: str,
+):
+    """
+    Controlled reservation workflow.
+
+    The Harness validates the reservation before
+    the actual database operation.
+    """
+
+    if role != "customer":
+        return (
+            "Only customers can make reservations.",
+            None,
+        )
+
+    # Validate reservation before asking for the name.
+    number_of_people = reservation_info[
+        "number_of_people"
+    ]
+
+    if not 1 <= number_of_people <= 20:
+        return (
+            "Number of people must be between 1 and 20.",
+            None,
+        )
+
+    if not customer_name:
+        return (
+            "Sure. What name should I put on the reservation?",
+            reservation_info,
+        )
+
+    harness = AgentHarness(role=role)
+
+    args = {
+        "customer_name": customer_name,
+        "reservation_date": reservation_info[
+            "reservation_date"
+        ],
+        "reservation_time": reservation_info[
+            "reservation_time"
+        ],
+        "number_of_people": number_of_people,
+    }
+
+    result_json, _ = harness.execute(
+        tool=reserve_table_tool,
+        tool_name="reserve_table_tool",
+        args=args,
+        current_count=0,
+    )
+
+    result = json.loads(result_json)
+
+    if result.get("status") != "success":
+        return (
+            result.get(
+                "message",
+                "I couldn't make the reservation.",
+            ),
+            None,
+        )
+
+    reservation_id = result.get(
+        "reservation_id"
+    )
+
+    return (
+        f"Reservation #{reservation_id} confirmed "
+        f"for {customer_name}: "
+        f"{number_of_people} people "
+        f"on {reservation_info['reservation_date']} "
+        f"at {reservation_info['reservation_time']}.",
+        None,
+    )
+
 def run_request(
     graph,
     user_input: str,
@@ -608,6 +967,39 @@ def run_request(
     # ========================================================
 
     pending_order = state.get("pending_order")
+    
+    # ========================================================
+    # HANDLE PENDING RESERVATION
+    # ========================================================
+
+    pending_reservation = state.get(
+        "pending_reservation"
+    )
+
+    if pending_reservation:
+        customer_name = extract_customer_name(
+            user_input
+        )
+
+        if customer_name:
+            response, new_pending = (
+                handle_reservation_workflow(
+                    pending_reservation,
+                    customer_name,
+                    role,
+                )
+            )
+
+            state["pending_reservation"] = new_pending
+
+            state["messages"] = state.get(
+                "messages",
+                [],
+            ) + [
+                AIMessage(content=response)
+            ]
+
+            return response, state
 
     if pending_order:
         customer_name = extract_customer_name(user_input)
@@ -631,6 +1023,78 @@ def run_request(
             return response, state
 
     # ========================================================
+    # DETECT STOCK CHECK
+    # ========================================================
+
+    stock_check_info = extract_stock_check_request(user_input)
+
+    if stock_check_info:
+        response = handle_stock_check_workflow(
+            stock_check_info,
+            role,
+        )
+
+        state["messages"] = state.get(
+            "messages",
+            [],
+        ) + [
+            AIMessage(content=response)
+        ]
+
+        return response, state
+
+    # ========================================================
+    # DETECT STOCK UPDATE
+    # ========================================================
+
+    stock_update_info = extract_stock_update_request(user_input)
+
+    if stock_update_info:
+        response = handle_stock_update_workflow(
+            stock_update_info,
+            role,
+        )
+
+        state["messages"] = state.get(
+            "messages",
+            [],
+        ) + [
+            AIMessage(content=response)
+        ]
+
+        return response, state
+    
+    # ========================================================
+    # DETECT RESERVATION
+    # ========================================================
+
+    reservation_info = extract_reservation_request(
+        user_input
+    )
+
+    if reservation_info:
+        customer_name = extract_customer_name(
+            user_input
+        )
+
+        response, new_pending = handle_reservation_workflow(
+            reservation_info,
+            customer_name,
+            role,
+        )
+
+        state["pending_reservation"] = new_pending
+
+        state["messages"] = state.get(
+            "messages",
+            [],
+        ) + [
+            AIMessage(content=response)
+        ]
+
+        return response, state
+
+    # ========================================================
     # DETECT NEW ORDER
     # ========================================================
 
@@ -646,6 +1110,28 @@ def run_request(
         )
 
         state["pending_order"] = new_pending
+
+        state["messages"] = state.get(
+            "messages",
+            [],
+        ) + [
+            AIMessage(content=response)
+        ]
+
+        return response, state
+
+    # ========================================================
+    # IGNORE SIMPLE ROLE / CONTROL MESSAGES
+    # ========================================================
+
+    if user_input.lower() in {
+        "customer",
+        "admin",
+        "hello",
+        "hi",
+        "hey",
+    }:
+        response = "How can I help you?"
 
         state["messages"] = state.get(
             "messages",

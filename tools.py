@@ -160,21 +160,79 @@ def reserve_table(customer_name: str, reservation_date: date, reservation_time: 
 
 def update_stock(product_id: int, quantity: int) -> dict:
     if product_id <= 0:
-        return {"status": "error", "error_code": "INVALID_PRODUCT_ID", "message": "product_id must be positive."}
-    if quantity < 0 or quantity > 1000:
-        return {"status": "error", "error_code": "INVALID_STOCK", "message": "Stock must be between 0 and 1000."}
+        return {
+            "status": "error",
+            "error": "INVALID_PRODUCT_ID",
+            "message": "Product ID must be positive.",
+        }
 
-    conn = get_connection()
+    if quantity < 0 or quantity > 1000:
+        return {
+            "status": "error",
+            "error": "INVALID_QUANTITY",
+            "message": "Stock quantity must be between 0 and 1000.",
+        }
+
+    conn = None
+
     try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE products SET stock = %s WHERE id = %s RETURNING id, name, stock", (quantity, product_id))
-                row = cur.fetchone()
-                if row is None:
-                    return {"status": "error", "error_code": "PRODUCT_NOT_FOUND", "message": "Product not found."}
-                return {"status": "success", "product_id": row[0], "product_name": row[1], "new_stock": row[2]}
+        conn = get_connection()
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT name
+                FROM products
+                WHERE id = %s
+                """,
+                (product_id,),
+            )
+
+            product = cur.fetchone()
+
+            if not product:
+                return {
+                    "status": "error",
+                    "error": "PRODUCT_NOT_FOUND",
+                    "message": f"Product {product_id} was not found.",
+                }
+
+            product_name = product[0]
+
+            cur.execute(
+                """
+                UPDATE products
+                SET stock = %s
+                WHERE id = %s
+                """,
+                (quantity, product_id),
+            )
+
+            conn.commit()
+
+            return {
+                "status": "success",
+                "product_id": product_id,
+                "product_name": product_name,
+                "stock": quantity,
+                "message": (
+                    f"Product {product_id} "
+                    f"({product_name}) stock updated to {quantity}."
+                ),
+            }
+
     except Exception:
-        conn.rollback()
-        return {"status": "error", "error_code": "STOCK_UPDATE_FAILED", "message": "Stock update failed safely."}
+        if conn:
+            conn.rollback()
+
+        return {
+            "status": "error",
+            "error": "UPDATE_STOCK_FAILED",
+            "message": "Failed to update product stock.",
+        }
+
     finally:
-        conn.close()
+        if conn:
+            conn.close()
+            
+
