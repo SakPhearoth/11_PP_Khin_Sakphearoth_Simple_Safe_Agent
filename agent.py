@@ -1,3 +1,5 @@
+DEBUG_TRACE = False
+
 import json
 import os
 import re
@@ -113,6 +115,15 @@ TOOL_BY_NAME = {
     tool_.name: tool_
     for tool_ in TOOLS
 }
+
+def trace_tool_call(tool_name: str, args: dict[str, Any], result: dict[str, Any]):
+    if not DEBUG_TRACE:
+        return
+
+    print("\n[TOOL CALL]")
+    print(f"Tool: {tool_name}")
+    print(f"Input: {json.dumps(args, default=str)}")
+    print(f"Result: {json.dumps(result, default=str)}")
 
 
 # ============================================================
@@ -464,6 +475,14 @@ def handle_order_workflow(
     )
 
     search_result = json.loads(search_result_json)
+    
+    trace_tool_call(
+    "search_products_tool",
+    {
+        "product_name": order_info["product_name"]
+    },
+    search_result,
+    )
 
     if search_result.get("status") == "error":
         return (
@@ -504,6 +523,14 @@ def handle_order_workflow(
     )
 
     stock_result = json.loads(stock_result_json)
+    
+    trace_tool_call(
+    "check_stock_tool",
+    {
+        "product_id": product_id
+    },
+    stock_result,
+    )
 
     if stock_result.get("status") == "error":
         return (
@@ -559,6 +586,16 @@ def handle_order_workflow(
     )
 
     order_result = json.loads(order_result_json)
+    
+    trace_tool_call(
+    "place_order_tool",
+    {
+        "customer_name": customer_name or "Guest",
+        "product_id": product_id,
+        "quantity": quantity,
+    },
+    order_result,
+    )
 
     if order_result.get("status") != "success":
         return (
